@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // konfigurasi
+  serverExternalPackages: ["@google/genai"],
 };
 
 export default nextConfig;

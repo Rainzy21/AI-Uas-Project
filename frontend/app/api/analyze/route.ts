@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+// Removed GoogleGenAI import since we now use OpenRouter via fetch
 import { NextRequest } from "next/server";
 import { ALLOWED_TYPES, MAX_SIZE } from "@/lib/imageConstants";
 
@@ -10,13 +10,13 @@ const PROMPT = `Analyze this UI design image and return a single JSON object wit
     "title": "page/component name",
     "layout": "description of overall layout",
     "components": [{ "name": "", "description": "", "position": "" }],
-    "colorPalette": ["#hex"],
+    "colorPalette": ["#hex", ...],
     "typography": { "headings": "", "body": "", "style": "" },
-    "style": "description of design style (minimal, glassmorphism, material, etc)"
+    "style": "description of design style (minimal, glassmorphism, etc)"
   },
-  "html": "complete standalone HTML file string with Tailwind CSS CDN included that reproduces this design as accurately as possible"
+  "html": "complete standalone HTML file string with Tailwind CSS CDN that reproduces this design pixel-faithfully"
 }
-Return only valid JSON. No markdown, no code fences, no explanation outside the JSON.`;
+Return only valid JSON. No markdown, no code fences, no explanation.`;
 
 /** Detect actual image type from magic bytes — rejects attacker-supplied MIME. */
 function detectMimeType(buffer: ArrayBuffer): string | null {
@@ -102,35 +102,52 @@ export async function POST(req: NextRequest) {
 
     const base64 = Buffer.from(buffer).toString("base64");
 
-    const ai = new GoogleGenAI({ apiKey });
-
-    // S4: Race the Gemini call against a timeout to prevent indefinite hangs.
+    // S4: Race the OpenRouter call against a timeout to prevent indefinite hangs.
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error("TIMEOUT")), GEMINI_TIMEOUT_MS)
     );
 
-    const response = await Promise.race([
-      ai.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: PROMPT },
-              {
-                inlineData: {
-                  mimeType: detectedMime,
-                  data: base64,
-                },
-              },
-            ],
-          },
-        ],
-        // Doc2: Set low temperature for consistent, structured output.
-        config: {
-          temperature: 0.2,
+    const openRouterPromise = async () => {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "http://localhost:3000",
+          "X-Title": "VisAI UAS",
         },
-      }),
+        body: JSON.stringify({
+          model: "google/gemini-2.0-flash-001",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: PROMPT },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${detectedMime};base64,${base64}`
+                  }
+                }
+              ]
+            }
+          ],
+          temperature: 0.2,
+          response_format: { type: "json_object" }
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error?.message || `OpenRouter responded with status ${res.status}`);
+      }
+
+      const data = await res.json();
+      return { text: data.choices[0].message.content };
+    };
+
+    const response = await Promise.race([
+      openRouterPromise(),
       timeoutPromise,
     ]);
 
@@ -154,7 +171,6 @@ export async function POST(req: NextRequest) {
     return Response.json({
       analysis: result.analysis,
       html: result.html,
-      timestamp: Date.now(),
     });
   } catch (err) {
     if (err instanceof Error && err.message === "TIMEOUT") {
@@ -162,6 +178,7 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "Request timed out. Please try again." }, { status: 504 });
     }
     console.error("[/api/analyze] Unexpected error:", err);
-    return Response.json({ error: "Something went wrong" }, { status: 500 });
+    const errorMessage = err instanceof Error ? err.message : "Something went wrong";
+    return Response.json({ error: errorMessage }, { status: 500 });
   }
 }
