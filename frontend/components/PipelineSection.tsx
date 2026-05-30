@@ -7,14 +7,14 @@ export default function PipelineSection() {
       icon: <ImageIcon className="w-5 h-5 text-gray-400" />,
       title: "Upload Gambar",
       description: "Upload screenshot, mockup, atau foto design apapun — PNG, JPG, WebP hingga 20 MB.",
-      note: "Gambar dikonversi ke base64 di sisi klien. Tidak ada gambar yang disimpan di server.",
+      note: "Gambar dikonversi ke base64 di sisi server. Tidak ada gambar yang disimpan permanen.",
     },
     {
       id: "02",
       icon: <Send className="w-5 h-5 text-gray-400" />,
       title: "Kirim ke Gemini API",
       description: "Gambar dikirim ke Google Gemini 2.0 Flash bersama prompt terstruktur untuk analisis mendalam.",
-      note: "Menggunakan model multimodal Gemini dengan token temperature rendah untuk output yang konsisten.",
+      note: "Menggunakan model multimodal Gemini dengan temperature 0.2 untuk output yang konsisten dan terstruktur.",
     },
     {
       id: "03",

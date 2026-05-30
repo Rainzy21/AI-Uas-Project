@@ -1,33 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# VisAI — UI Design Analyzer
 
-## Getting Started
+Upload a UI screenshot or mockup (PNG, JPG, WebP) and get a detailed analysis plus a generated HTML+Tailwind reproduction — powered by Google Gemini 2.0 Flash.
 
-First, run the development server:
+## Setup
+
+1. **Install dependencies**
+
+   ```bash
+   npm install
+   ```
+
+2. **Configure environment**
+
+   Copy `.env.example` to `.env.local` and add your Gemini API key:
+
+   ```bash
+   cp .env.example .env.local
+   ```
+
+   Get a free API key from [Google AI Studio](https://aistudio.google.com/).
+
+3. **Run the development server**
+
+   ```bash
+   npm run dev
+   ```
+
+   Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+## Build
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run build
+npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Tech Stack
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- [Next.js 16](https://nextjs.org) (App Router)
+- [Tailwind CSS 4](https://tailwindcss.com)
+- [Google Gemini 2.0 Flash](https://ai.google.dev/) via `@google/genai`
+- TypeScript
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## How it works
 
-## Learn More
+1. Upload an image on `/upload`.
+2. The server converts it to base64 and sends it to Gemini with a structured prompt.
+3. Gemini returns a JSON object containing a design analysis and a standalone HTML file.
+4. Results are displayed on `/hasil` with a live preview and copyable HTML code.
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
 ## Deploy on Vercel
 
