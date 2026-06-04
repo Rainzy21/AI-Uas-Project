@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
           "X-Title": "VisAI UAS",
         },
         body: JSON.stringify({
-          model: "google/gemini-2.0-flash-001",
+          model: "google/gemini-2.5-flash",
           messages: [
             {
               role: "user",
@@ -133,6 +133,7 @@ export async function POST(req: NextRequest) {
             }
           ],
           temperature: 0.2,
+          max_tokens: 8192,
           response_format: { type: "json_object" }
         })
       });
