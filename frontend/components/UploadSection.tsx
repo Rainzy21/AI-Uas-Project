@@ -3,12 +3,19 @@
 import { useRef, useState, useEffect, DragEvent, ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import { UploadCloud, X, Loader2, AlertCircle } from "lucide-react";
-import { ALLOWED_TYPES, MAX_SIZE } from "@/lib/imageConstants";
+import { MAX_SIZE, MAX_SIZE_LABEL } from "@/lib/imageConstants";
+import { validateImageFileClient } from "@/lib/sniffImageFile";
+import { CLIENT_ANALYZE_TIMEOUT_MS } from "@/lib/analyzeTimeouts";
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function analyzeHeaders(): HeadersInit {
+  const key = process.env.NEXT_PUBLIC_ANALYZE_API_SECRET;
+  return key ? { "x-visai-key": key } : {};
 }
 
 export default function UploadSection() {
@@ -19,27 +26,32 @@ export default function UploadSection() {
   const [preview, setPreview] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Q5: Revoke previous object URL before creating a new one to prevent memory leaks.
-  function handleFile(selected: File) {
+  async function handleFile(selected: File) {
     setError(null);
-    if (!(ALLOWED_TYPES as readonly string[]).includes(selected.type)) {
-      setError("File tidak valid. Gunakan PNG, JPG, atau WebP.");
-      return;
+    setValidating(true);
+    try {
+      const validationError = await validateImageFileClient(
+        selected,
+        MAX_SIZE,
+        MAX_SIZE_LABEL
+      );
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+      setFile(selected);
+      setPreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return URL.createObjectURL(selected);
+      });
+    } finally {
+      setValidating(false);
     }
-    if (selected.size > MAX_SIZE) {
-      setError("File terlalu besar. Maksimal 20 MB.");
-      return;
-    }
-    setFile(selected);
-    setPreview((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return URL.createObjectURL(selected);
-    });
   }
 
-  // Q5: Revoke object URL on unmount.
   useEffect(() => {
     return () => {
       if (preview) URL.revokeObjectURL(preview);
@@ -47,17 +59,32 @@ export default function UploadSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_E2E_TEST !== "1") return;
+    (
+      window as Window & { __visaiE2ESelectFile?: (file: File) => void }
+    ).__visaiE2ESelectFile = (file) => {
+      void handleFile(file);
+    };
+    return () => {
+      delete (window as Window & { __visaiE2ESelectFile?: (file: File) => void })
+        .__visaiE2ESelectFile;
+    };
+    // E2E hook only; handleFile is stable enough for test file injection
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function handleInputChange(e: ChangeEvent<HTMLInputElement>) {
     if (e.target.files?.[0]) handleFile(e.target.files[0]);
   }
 
-  function handleDrop(e: DragEvent<HTMLDivElement>) {
+  function handleDrop(e: DragEvent<HTMLLabelElement>) {
     e.preventDefault();
     setDragging(false);
     if (e.dataTransfer.files?.[0]) handleFile(e.dataTransfer.files[0]);
   }
 
-  function handleDragOver(e: DragEvent<HTMLDivElement>) {
+  function handleDragOver(e: DragEvent<HTMLLabelElement>) {
     e.preventDefault();
     setDragging(true);
   }
@@ -79,11 +106,19 @@ export default function UploadSection() {
     setLoading(true);
     setError(null);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CLIENT_ANALYZE_TIMEOUT_MS);
+
     try {
       const formData = new FormData();
       formData.append("image", file);
 
-      const res = await fetch("/api/analyze", { method: "POST", body: formData });
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+        headers: analyzeHeaders(),
+      });
       const data = await res.json();
 
       if (!res.ok || data.error) {
@@ -91,7 +126,6 @@ export default function UploadSection() {
         return;
       }
 
-      // Q3: Guard against QuotaExceededError when storing large HTML.
       try {
         localStorage.setItem("visai_result", JSON.stringify(data));
       } catch {
@@ -99,9 +133,16 @@ export default function UploadSection() {
         return;
       }
       router.push("/hasil");
-    } catch {
-      setError("Gagal menghubungi server. Periksa koneksi internet Anda.");
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setError(
+          "Permintaan habis waktu. Model AI mungkin lambat—coba lagi, atau ganti OPENROUTER_MODEL di .env.local."
+        );
+      } else {
+        setError("Gagal menghubungi server. Periksa koneksi internet Anda.");
+      }
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   }
@@ -114,45 +155,44 @@ export default function UploadSection() {
         </div>
         <h2 className="text-3xl font-bold text-white mb-4">Upload Gambar</h2>
         <p className="text-gray-400 text-center text-sm">
-          Upload gambar design untuk diproses Gemini AI.
+          Upload gambar design untuk diproses via OpenRouter.
         </p>
       </div>
 
       <div className="w-full max-w-2xl flex flex-col gap-4">
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          className="hidden"
-          onChange={handleInputChange}
-        />
-
-        {/* Dropzone */}
         {!file && (
-          <div
-            onClick={() => inputRef.current?.click()}
+          <label
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            className={`w-full bg-[#0f0f0f] border rounded-2xl p-12 flex flex-col items-center justify-center cursor-pointer transition-colors group ${
+            className={`relative w-full bg-[#0f0f0f] border rounded-2xl p-12 flex flex-col items-center justify-center cursor-pointer transition-colors group ${
               dragging
                 ? "border-[#555] bg-[#141414]"
                 : "border-[#222] hover:bg-[#141414] hover:border-[#333]"
             }`}
           >
-            <div className="bg-[#1a1a1a] p-3 rounded-xl mb-4 group-hover:scale-110 transition-transform duration-300 border border-[#262626]">
-              <UploadCloud className="w-6 h-6 text-gray-400" />
+            <input
+              ref={inputRef}
+              id="visai-file-input"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={handleInputChange}
+              onInput={handleInputChange}
+              className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
+            />
+            <div className="relative z-0 flex flex-col items-center pointer-events-none">
+              <div className="bg-[#1a1a1a] p-3 rounded-xl mb-4 group-hover:scale-110 transition-transform duration-300 border border-[#262626]">
+                <UploadCloud className="w-6 h-6 text-gray-400" />
+              </div>
+              <p className="text-gray-300 font-medium mb-2 text-sm">Drag &amp; drop atau klik untuk upload</p>
+              <p className="text-[#555] text-xs">PNG · JPG · WebP — Maks {MAX_SIZE_LABEL}</p>
             </div>
-            <p className="text-gray-300 font-medium mb-2 text-sm">Drag &amp; drop atau klik untuk upload</p>
-            <p className="text-[#555] text-xs">PNG · JPG · WebP — Maks 20 MB</p>
-          </div>
+          </label>
         )}
 
-        {/* Preview */}
         {file && preview && (
           <div className="w-full bg-[#0f0f0f] border border-[#222] rounded-2xl overflow-hidden">
             <div className="relative w-full aspect-video bg-[#0a0a0a]">
-              {/* Q1: Use plain <img> for blob: URLs — next/image cannot optimize them. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={preview}
@@ -175,7 +215,6 @@ export default function UploadSection() {
           </div>
         )}
 
-        {/* Error */}
         {error && (
           <div className="flex items-center gap-2 bg-red-950/30 border border-red-900/40 text-red-400 text-sm px-4 py-3 rounded-xl">
             <AlertCircle className="w-4 h-4 shrink-0" />
@@ -183,17 +222,16 @@ export default function UploadSection() {
           </div>
         )}
 
-        {/* Submit */}
         {file && (
           <button
             onClick={handleSubmit}
-            disabled={loading}
+            disabled={loading || validating}
             className="w-full flex items-center justify-center gap-2 bg-[#262626] hover:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-white py-3 rounded-xl font-medium border border-[#333] text-sm"
           >
             {loading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Memproses dengan Gemini AI...
+                Memproses dengan OpenRouter AI...
               </>
             ) : (
               "Proses Gambar"

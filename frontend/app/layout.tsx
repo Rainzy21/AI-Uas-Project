@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "VisAI - Ubah Gambar UI Menjadi Kode HTML",
-  description: "Upload screenshot atau mockup design — Gemini AI akan menganalisis, membuat struktur JSON, lalu menghasilkan kode HTML + Tailwind siap pakai.",
+  description: "Upload screenshot atau mockup design — OpenRouter AI akan menganalisis, membuat struktur JSON, lalu menghasilkan kode HTML + Tailwind siap pakai.",
 };
 
 export default function RootLayout({
@@ -25,7 +25,7 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="id"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col relative">

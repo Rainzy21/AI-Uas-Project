@@ -1,67 +1,165 @@
-import { GoogleGenAI } from "@google/genai";
 import { NextRequest } from "next/server";
-import { ALLOWED_TYPES, MAX_SIZE } from "@/lib/imageConstants";
+import { OpenRouter } from "@openrouter/sdk";
+import { OpenRouterError, RequestTimeoutError } from "@openrouter/sdk/models/errors";
+import { ALLOWED_TYPES, MAX_SIZE, MAX_SIZE_LABEL } from "@/lib/imageConstants";
+import { formatHtml } from "@/lib/formatHtml";
+import { VisAIResultSchema } from "@/lib/analyzeSchema";
+import { extractJson } from "@/lib/extractJson";
+import { SYSTEM_PROMPT, ANALYZE_PROMPT } from "@/lib/analyzePrompts";
+import { preparePreviewHtml } from "@/lib/preparePreviewHtml";
+import { checkAnalyzeAuth } from "@/lib/analyzeAuth";
+import { detectMimeType } from "@/lib/detectMimeType";
+import { captureRouteError } from "@/lib/observability";
+import { OPENROUTER_TIMEOUT_MS } from "@/lib/analyzeTimeouts";
+const MAX_RESPONSE_CHARS = 500_000;
+const DEFAULT_MODEL = "moonshotai/kimi-k2.6:free";
 
-const GEMINI_TIMEOUT_MS = 30_000;
-
-const PROMPT = `Analyze this UI design image and return a single JSON object with exactly two keys:
-{
-  "analysis": {
-    "title": "page/component name",
-    "layout": "description of overall layout",
-    "components": [{ "name": "", "description": "", "position": "" }],
-    "colorPalette": ["#hex"],
-    "typography": { "headings": "", "body": "", "style": "" },
-    "style": "description of design style (minimal, glassmorphism, material, etc)"
-  },
-  "html": "complete standalone HTML file string with Tailwind CSS CDN included that reproduces this design as accurately as possible"
-}
-Return only valid JSON. No markdown, no code fences, no explanation outside the JSON.`;
-
-/** Detect actual image type from magic bytes — rejects attacker-supplied MIME. */
-function detectMimeType(buffer: ArrayBuffer): string | null {
-  if (buffer.byteLength < 12) return null;
-  const b = new Uint8Array(buffer, 0, 12);
-  // PNG: 89 50 4E 47 0D 0A 1A 0A
-  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
-  // JPEG: FF D8 FF
-  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
-  // WebP: RIFF????WEBP
-  if (
-    b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
-    b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50
-  ) return "image/webp";
-  return null;
-}
-
-interface AnalysisShape {
-  title: string;
-  layout: string;
-  components: { name: string; description: string; position: string }[];
-  colorPalette: string[];
-  typography: { headings: string; body: string; style: string };
-  style: string;
-}
-
-/** Validate that the parsed JSON from Gemini has the expected shape. */
-function validateResult(obj: unknown): obj is { analysis: AnalysisShape; html: string } {
-  if (typeof obj !== "object" || obj === null) return false;
-  const r = obj as Record<string, unknown>;
-  if (typeof r.html !== "string") return false;
-  const a = r.analysis as Record<string, unknown> | undefined;
-  if (typeof a !== "object" || a === null) return false;
-  return (
-    typeof a.title === "string" &&
-    typeof a.layout === "string" &&
-    Array.isArray(a.components) &&
-    Array.isArray(a.colorPalette) &&
-    typeof a.typography === "object" && a.typography !== null &&
-    typeof a.style === "string"
+function logError(
+  requestId: string,
+  message: string,
+  extra?: Record<string, unknown>
+) {
+  console.error(
+    JSON.stringify({
+      level: "error",
+      requestId,
+      route: "/api/analyze",
+      message,
+      ...extra,
+    })
   );
 }
 
-export async function POST(req: NextRequest) {
+/** Map OpenRouter HTTP status to a user-facing message. */
+function openRouterUserMessage(status: number, errBody: string): string {
+  if (status === 401) {
+    return "Invalid OpenRouter API key. Create a new key at openrouter.ai/keys, update OPENROUTER_API_KEY in .env.local, then restart the dev server.";
+  }
+  if (status === 402) {
+    return "OpenRouter account has insufficient credits. Add credits at openrouter.ai/credits.";
+  }
+  if (status === 429) {
+    try {
+      const parsed = JSON.parse(errBody) as {
+        error?: { message?: string; metadata?: { raw?: string } };
+      };
+      const raw = parsed.error?.metadata?.raw ?? parsed.error?.message ?? "";
+      if (/free|rate.?limit/i.test(raw)) {
+        return (
+          "Model gratis OpenRouter sedang dibatasi. Tunggu 1–2 menit lalu coba lagi, " +
+          "atau ganti OPENROUTER_MODEL di .env.local ke model berbayar (butuh kredit di openrouter.ai/credits)."
+        );
+      }
+      if (raw) {
+        return `OpenRouter rate limit: ${raw.slice(0, 200)}`;
+      }
+    } catch {
+      // ignore parse failure
+    }
+    return (
+      "OpenRouter rate limit tercapai. Tunggu sebentar dan coba lagi, " +
+      "atau gunakan model lain lewat OPENROUTER_MODEL."
+    );
+  }
   try {
+    const parsed = JSON.parse(errBody) as { error?: { message?: string } };
+    const msg = parsed.error?.message;
+    if (msg) return `OpenRouter error: ${msg}`;
+  } catch {
+    // ignore parse failure
+  }
+  return "OpenRouter request failed. Check your API key and account credits.";
+}
+
+function retryDelayMs(err: unknown, attempt: number): number {
+  if (err instanceof OpenRouterError) {
+    const retryAfter = err.headers.get("retry-after");
+    if (retryAfter) {
+      const sec = Number(retryAfter);
+      if (!Number.isNaN(sec) && sec > 0) {
+        return Math.min(sec * 1000, 30_000);
+      }
+    }
+    if (err.statusCode === 429) {
+      return Math.min(2000 * 2 ** attempt, 15_000);
+    }
+  }
+  return 500 * 2 ** attempt;
+}
+
+async function withRetry<T>(fn: () => Promise<T>, attempts = 4): Promise<T> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      last = e;
+      const retryable =
+        e instanceof OpenRouterError && [429, 502, 503].includes(e.statusCode);
+      if (!retryable || i === attempts - 1) throw e;
+      await new Promise((r) => setTimeout(r, retryDelayMs(e, i)));
+    }
+  }
+  throw last;
+}
+
+async function callOpenRouter(
+  apiKey: string,
+  model: string,
+  mimeType: string,
+  base64: string
+): Promise<string> {
+  const openrouter = new OpenRouter({ apiKey });
+
+  const stream = await openrouter.chat.send(
+    {
+      httpReferer: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
+      appTitle: "VisAI",
+      chatRequest: {
+        model,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: ANALYZE_PROMPT },
+              {
+                type: "image_url",
+                imageUrl: { url: `data:${mimeType};base64,${base64}` },
+              },
+            ],
+          },
+        ],
+        stream: true,
+        temperature: 0.2,
+        maxTokens: 12_000,
+      },
+    },
+    { timeoutMs: OPENROUTER_TIMEOUT_MS }
+  );
+
+  const parts: string[] = [];
+  let totalLen = 0;
+  for await (const chunk of stream) {
+    const content = chunk.choices[0]?.delta?.content;
+    if (!content) continue;
+    parts.push(content);
+    totalLen += content.length;
+    if (totalLen > MAX_RESPONSE_CHARS) {
+      throw new Error("Model response exceeded size limit");
+    }
+  }
+  return parts.join("");
+}
+
+export async function POST(req: NextRequest) {
+  const requestId = crypto.randomUUID();
+
+  try {
+    if (!checkAnalyzeAuth(req.headers.get("x-visai-key"))) {
+      return Response.json({ error: "Unauthorized", requestId }, { status: 401 });
+    }
+
     const formData = await req.formData();
     const file = formData.get("image") as File | null;
 
@@ -78,20 +176,18 @@ export async function POST(req: NextRequest) {
 
     if (file.size > MAX_SIZE) {
       return Response.json(
-        { error: "File too large. Maximum size is 20 MB." },
+        { error: `File too large. Maximum size is ${MAX_SIZE_LABEL}.` },
         { status: 400 }
       );
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
-      console.error("[/api/analyze] GEMINI_API_KEY is not set");
-      return Response.json({ error: "API key not configured" }, { status: 500 });
+      logError(requestId, "OPENROUTER_API_KEY is not set");
+      return Response.json({ error: "API key not configured", requestId }, { status: 500 });
     }
 
     const buffer = await file.arrayBuffer();
-
-    // S3: Verify actual image bytes match an allowed type (magic bytes check).
     const detectedMime = detectMimeType(buffer);
     if (!detectedMime || !(ALLOWED_TYPES as readonly string[]).includes(detectedMime)) {
       return Response.json(
@@ -100,68 +196,94 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (file.type !== detectedMime) {
+      return Response.json(
+        { error: "Declared file type does not match file content." },
+        { status: 400 }
+      );
+    }
+
     const base64 = Buffer.from(buffer).toString("base64");
+    const model = process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
+    const startedAt = Date.now();
 
-    const ai = new GoogleGenAI({ apiKey });
-
-    // S4: Race the Gemini call against a timeout to prevent indefinite hangs.
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("TIMEOUT")), GEMINI_TIMEOUT_MS)
+    const rawText = await withRetry(() =>
+      callOpenRouter(apiKey, model, detectedMime, base64)
     );
-
-    const response = await Promise.race([
-      ai.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: PROMPT },
-              {
-                inlineData: {
-                  mimeType: detectedMime,
-                  data: base64,
-                },
-              },
-            ],
-          },
-        ],
-        // Doc2: Set low temperature for consistent, structured output.
-        config: {
-          temperature: 0.2,
-        },
-      }),
-      timeoutPromise,
-    ]);
-
-    const rawText = response.text ?? "";
-    const clean = rawText.replace(/```json\s*|```/g, "").trim();
+    const clean = extractJson(rawText);
 
     let result: unknown;
     try {
       result = JSON.parse(clean);
     } catch {
-      console.error("[/api/analyze] Failed to parse Gemini response as JSON:", rawText.slice(0, 200));
-      return Response.json({ error: "Failed to parse Gemini response as JSON" }, { status: 502 });
+      logError(requestId, "Failed to parse model response as JSON", {
+        preview: rawText.slice(0, 200),
+      });
+      return Response.json(
+        { error: "Failed to parse model response as JSON", requestId },
+        { status: 502 }
+      );
     }
 
-    // S2: Validate the parsed object matches the expected schema.
-    if (!validateResult(result)) {
-      console.error("[/api/analyze] Gemini response did not match expected schema:", JSON.stringify(result).slice(0, 200));
-      return Response.json({ error: "Gemini returned an unexpected response shape" }, { status: 502 });
+    const parsed = VisAIResultSchema.safeParse(result);
+    if (!parsed.success) {
+      logError(requestId, "Schema validation failed", {
+        issues: parsed.error.flatten(),
+      });
+      return Response.json(
+        { error: "Model returned an unexpected response shape", requestId },
+        { status: 502 }
+      );
     }
+
+    const { analysis, html } = parsed.data;
+    const safeHtml = formatHtml(preparePreviewHtml(html, analysis));
+
+    console.info(
+      JSON.stringify({
+        level: "info",
+        requestId,
+        route: "/api/analyze",
+        message: "analyze success",
+        model,
+        durationMs: Date.now() - startedAt,
+      })
+    );
 
     return Response.json({
-      analysis: result.analysis,
-      html: result.html,
+      analysis,
+      html: safeHtml,
       timestamp: Date.now(),
     });
   } catch (err) {
-    if (err instanceof Error && err.message === "TIMEOUT") {
-      console.error("[/api/analyze] Gemini request timed out");
-      return Response.json({ error: "Request timed out. Please try again." }, { status: 504 });
+    captureRouteError(err, { requestId, route: "/api/analyze" });
+    if (err instanceof OpenRouterError) {
+      logError(requestId, "OpenRouter error", {
+        status: err.statusCode,
+        bodyPreview: err.body.slice(0, 300),
+      });
+      return Response.json(
+        { error: openRouterUserMessage(err.statusCode, err.body), requestId },
+        { status: 502 }
+      );
     }
-    console.error("[/api/analyze] Unexpected error:", err);
-    return Response.json({ error: "Something went wrong" }, { status: 500 });
+    if (err instanceof RequestTimeoutError) {
+      logError(requestId, "OpenRouter request timed out");
+      return Response.json(
+        { error: "Request timed out. Please try again.", requestId },
+        { status: 504 }
+      );
+    }
+    if (err instanceof Error && err.message === "Model response exceeded size limit") {
+      logError(requestId, err.message);
+      return Response.json(
+        { error: "Model response was too large. Try a simpler image.", requestId },
+        { status: 502 }
+      );
+    }
+    logError(requestId, "Unexpected error", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return Response.json({ error: "Something went wrong", requestId }, { status: 500 });
   }
 }

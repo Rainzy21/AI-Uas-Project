@@ -4,51 +4,42 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { FileCode2, Copy, Check, LayoutTemplate, Code2, UploadCloud } from "lucide-react";
-
-interface Analysis {
-  title: string;
-  layout: string;
-  components: { name: string; description: string; position: string }[];
-  colorPalette: string[];
-  typography: { headings: string; body: string; style: string };
-  style: string;
-}
-
-interface VisAIResult {
-  analysis: Analysis;
-  html: string;
-  timestamp: number;
-}
+import { parseVisAIResult, type VisAIResult } from "@/lib/analyzeSchema";
+import { safeColor } from "@/lib/safeColor";
 
 export default function ResultSection() {
   const router = useRouter();
   const [result, setResult] = useState<VisAIResult | null>(null);
   const [tab, setTab] = useState<"preview" | "code">("preview");
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
 
   useEffect(() => {
-    const stored = localStorage.getItem("visai_result");
-    if (stored) {
-      try {
-        // Client-only localStorage read after mount avoids hydration mismatch;
-        // setting state here is intentional.
+    try {
+      const stored = localStorage.getItem("visai_result");
+      if (!stored) return;
+      const parsed = parseVisAIResult(JSON.parse(stored));
+      if (parsed) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
-        setResult(JSON.parse(stored));
-      } catch {
-        // corrupted data, ignore
+        setResult(parsed);
       }
+    } catch {
+      // corrupted data
     }
   }, []);
 
-  // Q4: Await the clipboard promise; only show success if it actually succeeded.
+  const html = result?.html ?? "";
+
   async function handleCopy() {
     if (!result) return;
+    setCopyError(false);
     try {
-      await navigator.clipboard.writeText(result.html);
+      await navigator.clipboard.writeText(html);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard write failed (permissions / non-secure context) — fail silently.
+      setCopyError(true);
+      setTimeout(() => setCopyError(false), 4000);
     }
   }
 
@@ -57,7 +48,6 @@ export default function ResultSection() {
     router.push("/upload");
   }
 
-  // Empty state
   if (!result) {
     return (
       <section id="hasil" className="min-h-screen flex flex-col items-center justify-center py-24 px-4">
@@ -80,22 +70,12 @@ export default function ResultSection() {
     );
   }
 
-  // S2: Apply defensive defaults so a partially-shaped response doesn't crash the render.
-  const analysis: Analysis = {
-    title: result.analysis?.title ?? "Untitled",
-    layout: result.analysis?.layout ?? "",
-    components: result.analysis?.components ?? [],
-    colorPalette: result.analysis?.colorPalette ?? [],
-    typography: result.analysis?.typography ?? { headings: "", body: "", style: "" },
-    style: result.analysis?.style ?? "",
-  };
-  const html = result.html ?? "";
+  const { analysis } = result;
 
   return (
     <section id="hasil" className="py-24 px-4 flex flex-col items-center">
       <div className="w-full max-w-5xl flex flex-col gap-6">
 
-        {/* Header */}
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <div className="px-3 py-1.5 rounded-full border border-[#262626] bg-[#111] inline-block mb-3">
@@ -113,9 +93,7 @@ export default function ResultSection() {
           </button>
         </div>
 
-        {/* Metadata cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {/* Color palette */}
           <div className="bg-[#0f0f0f] border border-[#222] rounded-2xl p-4">
             <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-3">Color Palette</p>
             <div className="flex flex-wrap gap-2">
@@ -123,7 +101,7 @@ export default function ResultSection() {
                 <div key={i} className="flex items-center gap-1.5">
                   <div
                     className="w-5 h-5 rounded-md border border-[#333]"
-                    style={{ backgroundColor: color }}
+                    style={{ backgroundColor: safeColor(color) }}
                   />
                   <span className="text-gray-400 text-xs font-mono">{color}</span>
                 </div>
@@ -131,7 +109,6 @@ export default function ResultSection() {
             </div>
           </div>
 
-          {/* Typography */}
           <div className="bg-[#0f0f0f] border border-[#222] rounded-2xl p-4">
             <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-3">Typography</p>
             <p className="text-gray-400 text-xs mb-1"><span className="text-gray-600">Headings:</span> {analysis.typography.headings}</p>
@@ -139,14 +116,29 @@ export default function ResultSection() {
             <p className="text-gray-400 text-xs"><span className="text-gray-600">Style:</span> {analysis.typography.style}</p>
           </div>
 
-          {/* Layout */}
           <div className="bg-[#0f0f0f] border border-[#222] rounded-2xl p-4">
             <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-3">Layout</p>
             <p className="text-gray-400 text-xs leading-relaxed">{analysis.layout}</p>
           </div>
         </div>
 
-        {/* Tabs */}
+        {analysis.components.length > 0 && (
+          <div className="bg-[#0f0f0f] border border-[#222] rounded-2xl p-4">
+            <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-3">
+              Components
+            </p>
+            <ul className="space-y-3">
+              {analysis.components.map((c, i) => (
+                <li key={i} className="text-xs">
+                  <span className="text-white font-medium">{c.name}</span>
+                  <span className="text-gray-600"> · {c.position}</span>
+                  <p className="text-gray-400 mt-0.5">{c.description}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="bg-[#0f0f0f] border border-[#222] rounded-2xl overflow-hidden">
           <div className="flex border-b border-[#1a1a1a]">
             <button
@@ -174,15 +166,14 @@ export default function ResultSection() {
           </div>
 
           {tab === "preview" && (
-            <div className="w-full bg-white" style={{ height: "600px" }}>
-              {/* S1: Label the iframe as AI-generated, untrusted content. */}
+            <div className="w-full bg-[#e5e5e5] rounded-b-2xl overflow-hidden" style={{ height: "min(80vh, 720px)" }}>
               <div className="bg-yellow-950/60 border-b border-yellow-800/50 text-yellow-400 text-xs px-4 py-1.5 font-medium">
-                ⚠ Konten berikut dihasilkan oleh AI dan tidak diverifikasi. Jalankan hanya jika Anda mempercayai hasilnya.
+                ⚠ Pratinjau AI — hasil bisa berbeda dari desain asli. Tailwind dimuat otomatis untuk styling.
               </div>
               <iframe
                 srcDoc={html}
-                className="w-full border-0"
-                style={{ height: "calc(100% - 32px)" }}
+                className="w-full border-0 bg-white"
+                style={{ height: "calc(100% - 32px)", minHeight: "480px" }}
                 sandbox="allow-scripts"
                 title="Preview"
               />
@@ -198,7 +189,12 @@ export default function ResultSection() {
                 {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
                 {copied ? "Tersalin!" : "Salin"}
               </button>
-              <pre className="overflow-auto p-5 text-xs text-gray-400 font-mono leading-relaxed max-h-[600px]">
+              {copyError && (
+                <p className="absolute top-12 right-3 text-xs text-red-400 z-10">
+                  Salin gagal — gunakan HTTPS
+                </p>
+              )}
+              <pre className="overflow-auto p-5 text-xs text-gray-400 font-mono leading-relaxed max-h-[600px] whitespace-pre">
                 <code>{html}</code>
               </pre>
             </div>

@@ -11,7 +11,7 @@ export default function HeroSection() {
     {
       icon: <FileJson className="w-5 h-5 text-gray-400" />,
       title: "Analisis JSON",
-      description: "Gemini AI mengurai komponen, warna, dan layout",
+      description: "OpenRouter AI mengurai komponen, warna, dan layout",
     },
     {
       icon: <Code className="w-5 h-5 text-gray-400" />,
@@ -29,7 +29,7 @@ export default function HeroSection() {
     <section id="beranda" className="min-h-screen flex flex-col items-center justify-center pt-32 pb-20 px-4">
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-[#333] bg-[#111] mb-8">
         <Sparkles className="w-3 h-3 text-gray-400" />
-        <span className="text-xs font-semibold tracking-wider text-gray-400">POWERED BY GOOGLE GEMINI 2.0 FLASH</span>
+        <span className="text-xs font-semibold tracking-wider text-gray-400">POWERED BY OPENROUTER</span>
       </div>
 
       <h1 className="text-5xl md:text-7xl font-bold text-center leading-tight mb-6 tracking-tight">
@@ -38,7 +38,7 @@ export default function HeroSection() {
       </h1>
 
       <p className="text-gray-400 text-center max-w-2xl text-lg mb-10 leading-relaxed">
-        Upload screenshot atau mockup design — Gemini AI akan <br className="hidden md:block"/>
+        Upload screenshot atau mockup design — OpenRouter AI akan <br className="hidden md:block"/>
         menganalisis, membuat struktur JSON, lalu menghasilkan <br className="hidden md:block"/>
         kode HTML + Tailwind siap pakai.
       </p>
