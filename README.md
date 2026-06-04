@@ -2,13 +2,13 @@
 
 Upload a UI screenshot or mockup and get structured design analysis plus **HTML + Tailwind** you can preview and copy — powered by [OpenRouter](https://openrouter.ai/) multimodal models.
 
-This README documents the **VisAI frontend** in the `frontend/` directory. Clone the repository, then run all npm commands from `frontend/`.
+The application lives in **`frontend/`**. Clone this repository, then run all npm commands from that directory.
 
 | | |
 |---|---|
 | **Stack** | Next.js 16 (App Router), React 19, Tailwind CSS 4, TypeScript |
 | **AI** | OpenRouter vision API (`@openrouter/sdk`) |
-| **Node** | 20+ (see `package.json` → `engines`) |
+| **Node** | 20+ (see `frontend/package.json` → `engines`) |
 
 ---
 
@@ -65,15 +65,15 @@ cd AI-Uas-Project
 ### Repository layout
 
 ```
-AI-Uas-Project/          ← Git repository root
+AI-Uas-Project/          ← Git repository root (this README)
+├── README.md
 └── frontend/            ← VisAI app (all npm commands run here)
     ├── app/
     ├── components/
     ├── lib/
     ├── e2e/
     ├── package.json
-    ├── .env.example     ← Copy to .env.local (not committed)
-    └── README.md        ← You are here
+    └── .env.example     ← Copy to .env.local (not committed)
 ```
 
 ### Work in the frontend folder
@@ -298,7 +298,7 @@ Run from `frontend/`:
 
 ## Environment variables
 
-Copy from [`.env.example`](.env.example). **Never commit** `.env.local` or real API keys.
+Copy from [`frontend/.env.example`](frontend/.env.example). **Never commit** `frontend/.env.local` or real API keys.
 
 ### Required
 
@@ -385,7 +385,7 @@ Copy from [`.env.example`](.env.example). **Never commit** `.env.local` or real 
 3. Recommended: `ANALYZE_API_SECRET`, `NEXT_PUBLIC_ANALYZE_API_SECRET`, Upstash Redis vars.
 4. Build: `npm run build` — keep uploads ≤ **4 MB**.
 
-CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs tests and E2E on `main` / `master`.
+CI: [`frontend/.github/workflows/ci.yml`](frontend/.github/workflows/ci.yml) runs tests and E2E on `main` / `master`.
 
 ---
 
