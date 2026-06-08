@@ -96,7 +96,6 @@ AI-Uas-Project/              ← Git repository root (this README)
     ├── proxy.ts               # Edge rate limit on /api/analyze
     ├── package.json
     ├── .env.example           # Env template (committed)
-    └── PRE_PRODUCTION_AUDIT.md
 ```
 
 ### Work in the frontend folder
