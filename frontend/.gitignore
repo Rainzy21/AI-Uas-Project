@@ -99,5 +99,6 @@ Desktop.ini
 .cursor/terminals/
 
 # --- Misc ---
+PRE_PRODUCTION_AUDIT.md
 *.local.md
 *.orig

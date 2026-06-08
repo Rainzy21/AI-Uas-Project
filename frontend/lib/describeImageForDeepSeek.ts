@@ -1,5 +1,4 @@
 import { SYSTEM_PROMPT, ANALYZE_PROMPT } from "@/lib/analyzePrompts";
-import { OPENROUTER_TIMEOUT_MS } from "@/lib/analyzeTimeouts";
 import {
   DEFAULT_GEMINI_MODEL,
   DEFAULT_OPENROUTER_MODEL,

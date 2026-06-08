@@ -15,7 +15,7 @@ export default function Navbar() {
   ];
 
   return (
-    <nav className="fixed top-6 left-1/2 -translate-x-1/2 z-50">
+    <nav aria-label="Navigasi utama" className="fixed top-6 left-1/2 -translate-x-1/2 z-50">
       <div className="bg-[#111111]/80 backdrop-blur-md border border-[#262626] rounded-full px-4 py-2 flex items-center gap-8 shadow-2xl">
         <div className="flex items-center gap-2 pr-4 border-r border-[#262626]">
           <div className="bg-[#262626] p-1.5 rounded-md">

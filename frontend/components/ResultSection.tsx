@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { FileCode2, Copy, Check, LayoutTemplate, Code2, UploadCloud } from "lucide-react";
@@ -10,7 +10,20 @@ import { safeColor } from "@/lib/safeColor";
 export default function ResultSection() {
   const router = useRouter();
   const [result, setResult] = useState<VisAIResult | null>(null);
-  const [tab, setTab] = useState<"preview" | "code">("preview");
+  const tabs = ["preview", "code"] as const;
+  type TabId = (typeof tabs)[number];
+  const [tab, setTab] = useState<TabId>("preview");
+
+  function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, current: TabId) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const index = tabs.indexOf(current);
+    const nextIndex =
+      event.key === "ArrowRight"
+        ? (index + 1) % tabs.length
+        : (index - 1 + tabs.length) % tabs.length;
+    setTab(tabs[nextIndex]);
+  }
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
 
@@ -140,33 +153,53 @@ export default function ResultSection() {
         )}
 
         <div className="bg-[#0f0f0f] border border-[#222] rounded-2xl overflow-hidden">
-          <div className="flex border-b border-[#1a1a1a]">
+          <div role="tablist" aria-label="Tampilan hasil" className="flex border-b border-[#1a1a1a]">
             <button
+              type="button"
+              role="tab"
+              id="tab-preview"
+              aria-selected={tab === "preview"}
+              aria-controls="panel-preview"
+              tabIndex={tab === "preview" ? 0 : -1}
               onClick={() => setTab("preview")}
+              onKeyDown={(event) => handleTabKeyDown(event, "preview")}
               className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-colors ${
                 tab === "preview"
                   ? "text-white border-b-2 border-white -mb-px"
                   : "text-gray-500 hover:text-gray-300"
               }`}
             >
-              <LayoutTemplate className="w-4 h-4" />
+              <LayoutTemplate className="w-4 h-4" aria-hidden="true" />
               Preview
             </button>
             <button
+              type="button"
+              role="tab"
+              id="tab-code"
+              aria-selected={tab === "code"}
+              aria-controls="panel-code"
+              tabIndex={tab === "code" ? 0 : -1}
               onClick={() => setTab("code")}
+              onKeyDown={(event) => handleTabKeyDown(event, "code")}
               className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-colors ${
                 tab === "code"
                   ? "text-white border-b-2 border-white -mb-px"
                   : "text-gray-500 hover:text-gray-300"
               }`}
             >
-              <Code2 className="w-4 h-4" />
+              <Code2 className="w-4 h-4" aria-hidden="true" />
               Kode HTML
             </button>
           </div>
 
           {tab === "preview" && (
-            <div className="w-full bg-[#e5e5e5] rounded-b-2xl overflow-hidden" style={{ height: "min(80vh, 720px)" }}>
+            <div
+              role="tabpanel"
+              id="panel-preview"
+              aria-labelledby="tab-preview"
+              className="w-full bg-[#e5e5e5] rounded-b-2xl overflow-hidden"
+              style={{ height: "min(80vh, 720px)" }}
+            >
               <div className="bg-yellow-950/60 border-b border-yellow-800/50 text-yellow-400 text-xs px-4 py-1.5 font-medium">
                 ⚠ Pratinjau AI — hasil bisa berbeda dari desain asli. Tailwind dimuat otomatis untuk styling.
               </div>
@@ -181,8 +214,14 @@ export default function ResultSection() {
           )}
 
           {tab === "code" && (
-            <div className="relative">
+            <div
+              role="tabpanel"
+              id="panel-code"
+              aria-labelledby="tab-code"
+              className="relative"
+            >
               <button
+                type="button"
                 onClick={handleCopy}
                 className="absolute top-3 right-3 flex items-center gap-1.5 bg-[#1a1a1a] hover:bg-[#262626] border border-[#333] text-gray-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors z-10"
               >

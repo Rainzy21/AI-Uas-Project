@@ -314,7 +314,7 @@ describe("POST /api/analyze", () => {
           ]),
         }),
       }),
-      expect.objectContaining({ timeoutMs: 30_000 })
+      expect.objectContaining({ timeoutMs: 90_000 })
     );
   });
 

@@ -1,6 +1,6 @@
 /** Strip markdown fences and extract a JSON object substring when needed. */
 export function extractJson(raw: string): string {
-  let clean = raw
+  const clean = raw
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/```\s*$/i, "")
     .trim();

@@ -29,12 +29,26 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col relative">
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-white focus:text-black focus:rounded-lg focus:text-sm focus:font-medium"
+        >
+          Lewati ke konten
+        </a>
         <Navbar />
-        <div className="flex-1 w-full max-w-7xl mx-auto flex flex-col pt-32">
+        <div
+          id="main-content"
+          className="flex-1 w-full max-w-7xl mx-auto flex flex-col pt-32"
+        >
           {children}
         </div>
-        <footer className="w-full py-8 text-center text-[#555] text-xs border-t border-[#111] mt-auto">
-          &copy; {new Date().getFullYear()} VisAI. All rights reserved.
+        <footer className="w-full py-8 text-center text-gray-500 text-xs border-t border-[#111] mt-auto">
+          <p>&copy; {new Date().getFullYear()} VisAI. All rights reserved.</p>
+          <p className="mt-2">
+            <a href="/kebijakan-privasi" className="hover:text-gray-300 transition-colors">
+              Kebijakan Privasi &amp; Penggunaan Data AI
+            </a>
+          </p>
         </footer>
       </body>
     </html>

@@ -34,7 +34,7 @@ export default function HeroSection() {
 
       <h1 className="text-5xl md:text-7xl font-bold text-center leading-tight mb-6 tracking-tight">
         Ubah Gambar UI <br />
-        <span className="text-[#555]">Menjadi Kode HTML</span>
+        <span className="text-gray-500">Menjadi Kode HTML</span>
       </h1>
 
       <p className="text-gray-400 text-center max-w-2xl text-lg mb-10 leading-relaxed">

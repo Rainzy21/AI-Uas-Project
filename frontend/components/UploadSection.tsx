@@ -70,8 +70,6 @@ export default function UploadSection() {
       delete (window as Window & { __visaiE2ESelectFile?: (file: File) => void })
         .__visaiE2ESelectFile;
     };
-    // E2E hook only; handleFile is stable enough for test file injection
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function handleInputChange(e: ChangeEvent<HTMLInputElement>) {
@@ -155,7 +153,11 @@ export default function UploadSection() {
         </div>
         <h2 className="text-3xl font-bold text-white mb-4">Upload Gambar</h2>
         <p className="text-gray-400 text-center text-sm">
-          Upload gambar design untuk dianalisis AI (Gemini atau OpenRouter).
+          Upload gambar design untuk dianalisis AI (Gemini atau OpenRouter).{" "}
+          <a href="/kebijakan-privasi" className="underline hover:text-gray-300">
+            Data dikirim ke penyedia AI pihak ketiga
+          </a>
+          .
         </p>
       </div>
 
@@ -185,7 +187,7 @@ export default function UploadSection() {
                 <UploadCloud className="w-6 h-6 text-gray-400" />
               </div>
               <p className="text-gray-300 font-medium mb-2 text-sm">Drag &amp; drop atau klik untuk upload</p>
-              <p className="text-[#555] text-xs">PNG · JPG · WebP — Maks {MAX_SIZE_LABEL}</p>
+              <p className="text-gray-500 text-xs">PNG · JPG · WebP — Maks {MAX_SIZE_LABEL}</p>
             </div>
           </label>
         )}
@@ -200,7 +202,9 @@ export default function UploadSection() {
                 className="w-full h-full object-contain"
               />
               <button
+                type="button"
                 onClick={clearFile}
+                aria-label="Hapus gambar"
                 className="absolute top-3 right-3 bg-[#1a1a1a] hover:bg-[#262626] border border-[#333] text-gray-400 hover:text-white p-1.5 rounded-lg transition-colors"
               >
                 <X className="w-4 h-4" />
@@ -209,29 +213,35 @@ export default function UploadSection() {
             <div className="px-5 py-3 border-t border-[#1a1a1a] flex items-center justify-between">
               <div>
                 <p className="text-gray-300 text-sm font-medium truncate max-w-xs">{file.name}</p>
-                <p className="text-[#555] text-xs">{formatBytes(file.size)}</p>
+                <p className="text-gray-500 text-xs">{formatBytes(file.size)}</p>
               </div>
             </div>
           </div>
         )}
 
         {error && (
-          <div className="flex items-center gap-2 bg-red-950/30 border border-red-900/40 text-red-400 text-sm px-4 py-3 rounded-xl">
-            <AlertCircle className="w-4 h-4 shrink-0" />
+          <div
+            role="alert"
+            aria-live="assertive"
+            className="flex items-center gap-2 bg-red-950/30 border border-red-900/40 text-red-400 text-sm px-4 py-3 rounded-xl"
+          >
+            <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
             {error}
           </div>
         )}
 
         {file && (
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={loading || validating}
+            aria-busy={loading}
             className="w-full flex items-center justify-center gap-2 bg-[#262626] hover:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-white py-3 rounded-xl font-medium border border-[#333] text-sm"
           >
             {loading ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Memproses dengan AI...
+                <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                <span aria-live="polite">Memproses dengan AI...</span>
               </>
             ) : (
               "Proses Gambar"
