@@ -136,7 +136,7 @@ export default function UploadSection() {
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         setError(
-          "Permintaan habis waktu. Model AI mungkin lambat—coba lagi, atau ganti OPENROUTER_MODEL di .env.local."
+          "Permintaan habis waktu. Model AI mungkin lambat—coba lagi, atau ganti GEMINI_MODEL / OPENROUTER_MODEL di .env.local."
         );
       } else {
         setError("Gagal menghubungi server. Periksa koneksi internet Anda.");
@@ -155,7 +155,7 @@ export default function UploadSection() {
         </div>
         <h2 className="text-3xl font-bold text-white mb-4">Upload Gambar</h2>
         <p className="text-gray-400 text-center text-sm">
-          Upload gambar design untuk diproses via OpenRouter.
+          Upload gambar design untuk dianalisis AI (Gemini atau OpenRouter).
         </p>
       </div>
 
@@ -231,7 +231,7 @@ export default function UploadSection() {
             {loading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Memproses dengan OpenRouter AI...
+                Memproses dengan AI...
               </>
             ) : (
               "Proses Gambar"

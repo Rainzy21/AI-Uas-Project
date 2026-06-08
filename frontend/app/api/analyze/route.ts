@@ -1,18 +1,20 @@
 import { NextRequest } from "next/server";
-import { OpenRouter } from "@openrouter/sdk";
 import { OpenRouterError, RequestTimeoutError } from "@openrouter/sdk/models/errors";
+import { ApiError } from "@google/genai";
 import { ALLOWED_TYPES, MAX_SIZE, MAX_SIZE_LABEL } from "@/lib/imageConstants";
 import { formatHtml } from "@/lib/formatHtml";
 import { VisAIResultSchema } from "@/lib/analyzeSchema";
 import { extractJson } from "@/lib/extractJson";
-import { SYSTEM_PROMPT, ANALYZE_PROMPT } from "@/lib/analyzePrompts";
 import { preparePreviewHtml } from "@/lib/preparePreviewHtml";
 import { checkAnalyzeAuth } from "@/lib/analyzeAuth";
 import { detectMimeType } from "@/lib/detectMimeType";
 import { captureRouteError } from "@/lib/observability";
-import { OPENROUTER_TIMEOUT_MS } from "@/lib/analyzeTimeouts";
-const MAX_RESPONSE_CHARS = 500_000;
-const DEFAULT_MODEL = "moonshotai/kimi-k2.6:free";
+import { resolveAnalyzeConfig } from "@/lib/analyzeConfig";
+import { callAnalyzeWithFallback } from "@/lib/callAnalyzeWithFallback";
+import { DeepSeekError, deepSeekUserMessage } from "@/lib/callDeepSeek";
+import { geminiUserMessage } from "@/lib/callGemini";
+import { openRouterUserMessage } from "@/lib/callOpenRouter";
+import { VisionProxyUnavailableError } from "@/lib/describeImageForDeepSeek";
 
 function logError(
   requestId: string,
@@ -28,128 +30,6 @@ function logError(
       ...extra,
     })
   );
-}
-
-/** Map OpenRouter HTTP status to a user-facing message. */
-function openRouterUserMessage(status: number, errBody: string): string {
-  if (status === 401) {
-    return "Invalid OpenRouter API key. Create a new key at openrouter.ai/keys, update OPENROUTER_API_KEY in .env.local, then restart the dev server.";
-  }
-  if (status === 402) {
-    return "OpenRouter account has insufficient credits. Add credits at openrouter.ai/credits.";
-  }
-  if (status === 429) {
-    try {
-      const parsed = JSON.parse(errBody) as {
-        error?: { message?: string; metadata?: { raw?: string } };
-      };
-      const raw = parsed.error?.metadata?.raw ?? parsed.error?.message ?? "";
-      if (/free|rate.?limit/i.test(raw)) {
-        return (
-          "Model gratis OpenRouter sedang dibatasi. Tunggu 1–2 menit lalu coba lagi, " +
-          "atau ganti OPENROUTER_MODEL di .env.local ke model berbayar (butuh kredit di openrouter.ai/credits)."
-        );
-      }
-      if (raw) {
-        return `OpenRouter rate limit: ${raw.slice(0, 200)}`;
-      }
-    } catch {
-      // ignore parse failure
-    }
-    return (
-      "OpenRouter rate limit tercapai. Tunggu sebentar dan coba lagi, " +
-      "atau gunakan model lain lewat OPENROUTER_MODEL."
-    );
-  }
-  try {
-    const parsed = JSON.parse(errBody) as { error?: { message?: string } };
-    const msg = parsed.error?.message;
-    if (msg) return `OpenRouter error: ${msg}`;
-  } catch {
-    // ignore parse failure
-  }
-  return "OpenRouter request failed. Check your API key and account credits.";
-}
-
-function retryDelayMs(err: unknown, attempt: number): number {
-  if (err instanceof OpenRouterError) {
-    const retryAfter = err.headers.get("retry-after");
-    if (retryAfter) {
-      const sec = Number(retryAfter);
-      if (!Number.isNaN(sec) && sec > 0) {
-        return Math.min(sec * 1000, 30_000);
-      }
-    }
-    if (err.statusCode === 429) {
-      return Math.min(2000 * 2 ** attempt, 15_000);
-    }
-  }
-  return 500 * 2 ** attempt;
-}
-
-async function withRetry<T>(fn: () => Promise<T>, attempts = 4): Promise<T> {
-  let last: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      last = e;
-      const retryable =
-        e instanceof OpenRouterError && [429, 502, 503].includes(e.statusCode);
-      if (!retryable || i === attempts - 1) throw e;
-      await new Promise((r) => setTimeout(r, retryDelayMs(e, i)));
-    }
-  }
-  throw last;
-}
-
-async function callOpenRouter(
-  apiKey: string,
-  model: string,
-  mimeType: string,
-  base64: string
-): Promise<string> {
-  const openrouter = new OpenRouter({ apiKey });
-
-  const stream = await openrouter.chat.send(
-    {
-      httpReferer: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
-      appTitle: "VisAI",
-      chatRequest: {
-        model,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: ANALYZE_PROMPT },
-              {
-                type: "image_url",
-                imageUrl: { url: `data:${mimeType};base64,${base64}` },
-              },
-            ],
-          },
-        ],
-        stream: true,
-        temperature: 0.2,
-        maxTokens: 12_000,
-      },
-    },
-    { timeoutMs: OPENROUTER_TIMEOUT_MS }
-  );
-
-  const parts: string[] = [];
-  let totalLen = 0;
-  for await (const chunk of stream) {
-    const content = chunk.choices[0]?.delta?.content;
-    if (!content) continue;
-    parts.push(content);
-    totalLen += content.length;
-    if (totalLen > MAX_RESPONSE_CHARS) {
-      throw new Error("Model response exceeded size limit");
-    }
-  }
-  return parts.join("");
 }
 
 export async function POST(req: NextRequest) {
@@ -181,9 +61,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      logError(requestId, "OPENROUTER_API_KEY is not set");
+    const analyzeConfig = resolveAnalyzeConfig();
+    if ("error" in analyzeConfig) {
+      logError(requestId, analyzeConfig.error);
       return Response.json({ error: "API key not configured", requestId }, { status: 500 });
     }
 
@@ -204,12 +84,14 @@ export async function POST(req: NextRequest) {
     }
 
     const base64 = Buffer.from(buffer).toString("base64");
-    const model = process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
     const startedAt = Date.now();
 
-    const rawText = await withRetry(() =>
-      callOpenRouter(apiKey, model, detectedMime, base64)
-    );
+    const {
+      rawText,
+      provider,
+      model,
+      usedFallback,
+    } = await callAnalyzeWithFallback(analyzeConfig, detectedMime, base64);
     const clean = extractJson(rawText);
 
     let result: unknown;
@@ -245,7 +127,9 @@ export async function POST(req: NextRequest) {
         requestId,
         route: "/api/analyze",
         message: "analyze success",
+        provider,
         model,
+        usedFallback,
         durationMs: Date.now() - startedAt,
       })
     );
@@ -257,6 +141,30 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     captureRouteError(err, { requestId, route: "/api/analyze" });
+    if (err instanceof DeepSeekError) {
+      logError(requestId, "DeepSeek error", {
+        status: err.status,
+        bodyPreview: err.body.slice(0, 300),
+      });
+      return Response.json(
+        { error: deepSeekUserMessage(err), requestId },
+        { status: 502 }
+      );
+    }
+    if (err instanceof VisionProxyUnavailableError) {
+      logError(requestId, err.message);
+      return Response.json({ error: err.message, requestId }, { status: 500 });
+    }
+    if (err instanceof ApiError) {
+      logError(requestId, "Gemini error", {
+        status: err.status,
+        message: err.message,
+      });
+      return Response.json(
+        { error: geminiUserMessage(err), requestId },
+        { status: 502 }
+      );
+    }
     if (err instanceof OpenRouterError) {
       logError(requestId, "OpenRouter error", {
         status: err.statusCode,
@@ -268,7 +176,14 @@ export async function POST(req: NextRequest) {
       );
     }
     if (err instanceof RequestTimeoutError) {
-      logError(requestId, "OpenRouter request timed out");
+      logError(requestId, "Model request timed out");
+      return Response.json(
+        { error: "Request timed out. Please try again.", requestId },
+        { status: 504 }
+      );
+    }
+    if (err instanceof Error && err.name === "AbortError") {
+      logError(requestId, "Model request timed out");
       return Response.json(
         { error: "Request timed out. Please try again.", requestId },
         { status: 504 }
@@ -278,6 +193,20 @@ export async function POST(req: NextRequest) {
       logError(requestId, err.message);
       return Response.json(
         { error: "Model response was too large. Try a simpler image.", requestId },
+        { status: 502 }
+      );
+    }
+    if (err instanceof Error && err.message === "Empty response from DeepSeek") {
+      logError(requestId, err.message);
+      return Response.json(
+        { error: "Model returned an empty response. Please try again.", requestId },
+        { status: 502 }
+      );
+    }
+    if (err instanceof Error && err.message === "Empty response from Gemini") {
+      logError(requestId, err.message);
+      return Response.json(
+        { error: "Model returned an empty response. Please try again.", requestId },
         { status: 502 }
       );
     }

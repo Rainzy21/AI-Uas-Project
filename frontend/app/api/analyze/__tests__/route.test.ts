@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 import { OpenRouterError, RequestTimeoutError } from "@openrouter/sdk/models/errors";
+import { ApiError } from "@google/genai";
 import { MAX_SIZE } from "@/lib/imageConstants";
 
-const { mockSend } = vi.hoisted(() => ({
+const { mockSend, mockGenerateContent } = vi.hoisted(() => ({
   mockSend: vi.fn(),
+  mockGenerateContent: vi.fn(),
 }));
 
 vi.mock("@openrouter/sdk", async (importOriginal) => {
@@ -13,6 +15,16 @@ vi.mock("@openrouter/sdk", async (importOriginal) => {
     ...actual,
     OpenRouter: class {
       chat = { send: mockSend };
+    },
+  };
+});
+
+vi.mock("@google/genai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@google/genai")>();
+  return {
+    ...actual,
+    GoogleGenAI: class {
+      models = { generateContent: mockGenerateContent };
     },
   };
 });
@@ -74,18 +86,43 @@ function mockOpenRouterResponse(content: string) {
   mockSend.mockResolvedValueOnce(mockStream(content));
 }
 
+function mockGeminiResponse(content: string) {
+  mockGenerateContent.mockResolvedValueOnce({ text: content });
+}
+
 describe("POST /api/analyze", () => {
-  const originalApiKey = process.env.OPENROUTER_API_KEY;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  const originalDeepseekKey = process.env.DEEPSEEK_API_KEY;
+  const originalGeminiKey = process.env.GEMINI_API_KEY;
+  const originalProvider = process.env.ANALYZE_PROVIDER;
   const originalSecret = process.env.ANALYZE_API_SECRET;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env.OPENROUTER_API_KEY = "test-key";
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+    delete process.env.DEEPSEEK_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    process.env.ANALYZE_PROVIDER = "openrouter";
     delete process.env.ANALYZE_API_SECRET;
   });
 
   afterEach(() => {
-    process.env.OPENROUTER_API_KEY = originalApiKey;
+    process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+    if (originalDeepseekKey !== undefined) {
+      process.env.DEEPSEEK_API_KEY = originalDeepseekKey;
+    } else {
+      delete process.env.DEEPSEEK_API_KEY;
+    }
+    if (originalGeminiKey !== undefined) {
+      process.env.GEMINI_API_KEY = originalGeminiKey;
+    } else {
+      delete process.env.GEMINI_API_KEY;
+    }
+    if (originalProvider !== undefined) {
+      process.env.ANALYZE_PROVIDER = originalProvider;
+    } else {
+      delete process.env.ANALYZE_PROVIDER;
+    }
     if (originalSecret !== undefined) {
       process.env.ANALYZE_API_SECRET = originalSecret;
     } else {
@@ -163,6 +200,17 @@ describe("POST /api/analyze", () => {
     const body = await res.json();
     expect(body.error).toMatch(/api key/i);
     expect(body.requestId).toBeDefined();
+  });
+
+  it("returns 500 when GEMINI provider is selected without GEMINI_API_KEY", async () => {
+    delete process.env.OPENROUTER_API_KEY;
+    process.env.ANALYZE_PROVIDER = "gemini";
+    const fd = new FormData();
+    fd.append("image", makeImageFile(pngBytes(), "image/png"));
+    const res = await POST(makeRequest(fd));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toMatch(/api key/i);
   });
 
   it("returns 502 with a clear message when OpenRouter rejects the API key", async () => {
@@ -333,5 +381,43 @@ describe("POST /api/analyze", () => {
     const body = await res.json();
     expect(body.html).not.toMatch(/onclick/i);
     expect(body.html).toContain("safe");
+  });
+
+  describe("Gemini provider", () => {
+    beforeEach(() => {
+      delete process.env.OPENROUTER_API_KEY;
+      process.env.GEMINI_API_KEY = "test-gemini-key";
+      process.env.ANALYZE_PROVIDER = "gemini";
+    });
+
+    it("returns 200 using Gemini on success", async () => {
+      mockGeminiResponse(JSON.stringify(VALID_RESULT));
+      const fd = new FormData();
+      fd.append("image", makeImageFile(pngBytes(), "image/png"));
+      const res = await POST(makeRequest(fd));
+      expect(res.status).toBe(200);
+      expect(mockGenerateContent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: "gemini-2.5-flash",
+          config: expect.objectContaining({
+            temperature: 0.2,
+            maxOutputTokens: 12_000,
+          }),
+        })
+      );
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it("returns 502 with a clear message when Gemini rejects the API key", async () => {
+      mockGenerateContent.mockRejectedValueOnce(
+        new ApiError({ message: "API key not valid.", status: 403 })
+      );
+      const fd = new FormData();
+      fd.append("image", makeImageFile(pngBytes(), "image/png"));
+      const res = await POST(makeRequest(fd));
+      expect(res.status).toBe(502);
+      const body = await res.json();
+      expect(body.error).toMatch(/invalid gemini api key/i);
+    });
   });
 });
